@@ -1172,6 +1172,30 @@ class PluginContext:
         self._manager._hooks.setdefault(hook_name, []).append(callback)
         logger.debug("Plugin %s registered hook: %s", self.manifest.name, hook_name)
 
+    # -- gateway RPC registration -----------------------------------------
+
+    def register_rpc(self, method_name: str, handler: Callable) -> None:
+        """Register a JSON-RPC method for the gateway WebSocket API.
+
+        The handler signature must be ``handler(rid, params) -> dict``
+        where *rid* is the JSON-RPC request id and *params* is the
+        request's ``params`` dict.  Return a JSON-serialisable dict
+        (the gateway wraps it into a JSON-RPC response envelope).
+
+        This lets plugins expose CRUD or query endpoints to the
+        Desktop Plugin GUI without modifying ``tui_gateway/server.py``.
+        """
+        if not method_name or not callable(handler):
+            logger.warning(
+                "Plugin '%s' tried to register invalid RPC method '%s'",
+                self.manifest.name, method_name,
+            )
+            return
+        self._manager._rpc_methods[method_name] = handler
+        logger.debug(
+            "Plugin %s registered RPC method: %s", self.manifest.name, method_name
+        )
+
     # -- middleware registration -------------------------------------------
 
     def register_middleware(self, kind: str, callback: Callable) -> None:
@@ -1271,6 +1295,9 @@ class PluginManager:
         # ``re.Pattern``, or a constraint dict); ``callback`` is an async
         # function with the slack_bolt signature ``(ack, body, action)``.
         self._slack_action_handlers: List[tuple] = []
+        # Plugin-registered JSON-RPC methods for the gateway.
+        # Maps method_name → handler(rid, params) → dict.
+        self._rpc_methods: Dict[str, Callable] = {}
 
     # -----------------------------------------------------------------------
     # Public
@@ -2074,6 +2101,17 @@ def has_middleware(kind: str) -> bool:
 def has_hook(hook_name: str) -> bool:
     """Return True when a hook has registered callbacks."""
     return get_plugin_manager().has_hook(hook_name)
+
+
+def get_plugin_rpc_methods() -> Dict[str, Callable]:
+    """Return all JSON-RPC methods registered by plugins.
+
+    Returns a dict mapping method_name to handler(rid, params).
+    The gateway merges these into its ``_methods`` dict at startup
+    so plugins can expose RPC endpoints without modifying
+    ``tui_gateway/server.py``.
+    """
+    return dict(get_plugin_manager()._rpc_methods)
 
 
 _thread_tool_whitelist = threading.local()
